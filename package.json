@@ -1,0 +1,23 @@
+{
+  "name": "expense-tracker",
+  "version": "1.0.0",
+  "description": "Serverless Expense Tracker with Collaborative Budget Sharing",
+  "scripts": {
+    "install:all": "npm install && cd frontend && npm install && cd ../infrastructure/cdk && pip install -r requirements.txt",
+    "dev": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "deploy:infra": "cd infrastructure/cdk && cdk deploy",
+    "destroy:infra": "cd infrastructure/cdk && cdk destroy",
+    "diff:infra": "cd infrastructure/cdk && cdk diff"
+  },
+  "keywords": [
+    "aws",
+    "serverless",
+    "expense-tracker",
+    "react",
+    "lambda",
+    "dynamodb"
+  ],
+  "author": "",
+  "license": "MIT"
+}

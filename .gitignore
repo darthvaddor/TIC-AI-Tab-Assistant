@@ -1,0 +1,112 @@
+# ============================================
+# TIC-AI Tab Assistant - .gitignore
+# ============================================
+
+# API Keys & Secrets (CRITICAL - DO NOT COMMIT)
+.env
+.env.local
+.env.*.local
+backend/.env
+backend/.env.local
+*.key
+*.pem
+*.p12
+secrets/
+credentials/
+config/secrets.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Python packaging
+build/
+dist/
+*.egg
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+lerna-debug.log*
+
+# IDE & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.cache
+.cache/
+
+# Chrome Extension (if building)
+*.crx
+*.pem
+*.zip
+extension.pem
+
+# AWS (if using in future)
+.aws-sam/
+samconfig.toml
+.aws/
+
+# Testing
+coverage/
+.nyc_output/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Backup files
+*.orig
+*.save
+*.swp
+*~
+
+# Local development
+local/
+dev/
+test-data/
+*.local
+
+# Template/example files
+main.py
+

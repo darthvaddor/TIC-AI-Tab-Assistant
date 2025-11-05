@@ -1,0 +1,27 @@
+#ticai-assistant {
+  animation: ticFadeIn 0.3s ease;
+  min-width: 380px;
+  min-height: 460px;
+}
+
+@keyframes ticFadeIn {
+  from {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+#tic-toggle:hover {
+  transform: scale(1.1);
+  transition: transform 0.2s ease;
+}
+
+/* Drag handle area (transparent) */
+#ticai-drag-handle {
+  cursor: move;
+  user-select: none;
+}

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>TIC-AI Bot</title>
+    <link rel="stylesheet" href="panel.css" />
+    <script type="module" src="libs/marked.esm.js"></script>
+  </head>
+  <body>
+    <div class="container">
+      <button id="closeBtn" class="close-btn">✖</button>
+      <div class="bot-header">TIC-AI Bot</div>
+
+      <div class="chat-container">
+        <div id="output" class="chat-output"></div>
+        <div id="thinking"></div>
+        <div class="chat-input">
+          <textarea
+            id="prompt"
+            placeholder="Ask something about your open tabs..."
+          ></textarea>
+          <button id="askBtn">Ask</button>
+        </div>
+      </div>
+
+      <footer>powered by LangGraph + OpenAI</footer>
+    </div>
+
+    <script type="module" src="panel.js"></script>
+  </body>
+</html>

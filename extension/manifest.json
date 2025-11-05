@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "TIC-AI Tab Assistant",
+  "description": "An intelligent multi-tab reasoning assistant that compares, summarizes and manages browser tabs.",
+  "version": "1.3.0",
+
+  "icons": {
+    "16": "popup/icon16.png",
+    "48": "popup/icon48.png",
+    "128": "popup/icon128.png"
+  },
+
+  "action": {
+    "default_title": "TIC-AI Assistant",
+    "default_popup": "popup/panel.html",
+    "default_icon": {
+      "16": "popup/icon16.png",
+      "48": "popup/icon48.png",
+      "128": "popup/icon128.png"
+    }
+  },
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "permissions": [
+    "tabs",
+    "scripting",
+    "activeTab",
+    "storage"
+  ],
+
+  "host_permissions": [
+    "<all_urls>"
+  ],
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/overlay.js"],
+      "css": ["content/overlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "popup/*",
+        "content/*",
+        "popup/libs/*"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
+
+  "options_ui": {
+    "page": "popup/panel.html",
+    "open_in_tab": false
+  },
+
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+T"
+      },
+      "description": "Toggle TIC-AI Assistant"
+    }
+  }
+}
