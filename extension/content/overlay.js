@@ -8,10 +8,23 @@ if (window.__ticaiOverlayInjected) {
   let ticaiDialog = null; // HTMLDialogElement to avoid page transforms
 
   async function createPopup() {
-    // remove any existing instance
-    const existing = document.getElementById("ticai-assistant");
-    if (existing) existing.remove();
-    if (ticaiContainer || ticaiDialog) return;
+    // Check if already exists - prevent duplicates
+    const existingDialog = document.getElementById("ticai-assistant-dialog");
+    const existingIframe = document.getElementById("ticai-assistant");
+    
+    // If already exists, don't create another
+    if (existingDialog || existingIframe || ticaiContainer || ticaiDialog) {
+      return; // Already open, don't create duplicate
+    }
+    
+    // Clean up any orphaned elements (safety check)
+    if (existingDialog) {
+      try { existingDialog.close(); } catch {}
+      existingDialog.remove();
+    }
+    if (existingIframe && !existingIframe.parentElement) {
+      existingIframe.remove();
+    }
 
     // Use a modal dialog (top-layer) so page transforms/zoom don't shrink it
     ticaiDialog = document.createElement("dialog");
@@ -67,11 +80,16 @@ if (window.__ticaiOverlayInjected) {
 
   chrome.runtime.onMessage.addListener((req) => {
     if (req.action === "toggleAssistant") {
-      if (ticaiContainer) removePopup();
+      if (ticaiContainer || ticaiDialog) removePopup();
       else createPopup();
     }
     if (req.action === "ensureAssistantOpen") {
-      if (!ticaiContainer) createPopup();
+      // Only create if it doesn't already exist
+      const existingDialog = document.getElementById("ticai-assistant-dialog");
+      const existingIframe = document.getElementById("ticai-assistant");
+      if (!existingDialog && !existingIframe && !ticaiContainer && !ticaiDialog) {
+        createPopup();
+      }
     }
   });
 
