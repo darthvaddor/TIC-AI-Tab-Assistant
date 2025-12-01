@@ -27,6 +27,10 @@ init_db()
 # Initialize simple agent (fast, direct processing)
 agent = SimpleAgent()
 
+# Generate session ID on startup (changes each time backend restarts)
+import time
+BACKEND_SESSION_ID = str(time.time())
+
 # =========================
 # Pydantic Models
 # =========================
@@ -54,14 +58,32 @@ class QueryInput(BaseModel):
 
 class AgentReply(BaseModel):
     """Response model from agent."""
+
+    # Core reply / routing fields
     reply: str
     mode: str
     chosen_tab_id: Optional[int] = None
+
+    # Tab / workspace metadata
     suggested_close_tab_ids: List[int] = Field(default_factory=list)
     workspace_summary: Optional[Dict[str, Any]] = None
+
+    # Alerts and price tracking
     alerts: List[Dict[str, Any]] = Field(default_factory=list)
     price_info: Optional[Dict[str, Any]] = Field(default_factory=dict)
-    should_ask_cleanup: bool = Field(default=False, description="Whether to prompt user to close irrelevant tabs")
+
+    # NEW: reminder payload (used by frontend to create Chrome alarms)
+    # Shape: {"message": str, "timestamp": str, "recurring": bool}
+    reminder: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Reminder details when mode == 'reminder'",
+    )
+
+    # Cleanup hint
+    should_ask_cleanup: bool = Field(
+        default=False,
+        description="Whether to prompt user to close irrelevant tabs",
+    )
 
 
 class WatchlistRequest(BaseModel):
@@ -98,7 +120,12 @@ app.add_middleware(
 @app.get("/health")
 def health() -> Dict[str, Any]:
     """Health check endpoint."""
-    return {"ok": True, "status": "running", "provider": MODEL_PROVIDER}
+    return {
+        "ok": True, 
+        "status": "running", 
+        "provider": MODEL_PROVIDER,
+        "session_id": BACKEND_SESSION_ID
+    }
 
 @app.get("/test-llm")
 def test_llm() -> Dict[str, Any]:
@@ -189,10 +216,9 @@ async def run_agent(payload: QueryInput) -> AgentReply:
         tabs = payload.tabs or []
         
         logger.info(f"Query: '{query}'")
-        logger.info(f"Number of tabs: {len(tabs)}")
-        if tabs:
-            logger.info(f"Tab IDs: {[t.id for t in tabs]}")
-            logger.info(f"Tab titles: {[t.title[:50] for t in tabs[:5]]}")
+        # Only log tab details for debugging if needed (reduced logging)
+        if len(tabs) > 0:
+            logger.debug(f"Tabs: {len(tabs)} tabs provided")
 
         if not query:
             return AgentReply(
@@ -201,6 +227,7 @@ async def run_agent(payload: QueryInput) -> AgentReply:
                 chosen_tab_id=None,
                 suggested_close_tab_ids=[],
                 price_info={},
+                reminder=None,
                 should_ask_cleanup=False,
             )
 
@@ -211,24 +238,22 @@ async def run_agent(payload: QueryInput) -> AgentReply:
                 chosen_tab_id=None,
                 suggested_close_tab_ids=[],
                 price_info={},
+                reminder=None,
                 should_ask_cleanup=False,
             )
 
         # Convert Pydantic models to dicts
         tabs_dict = [{"id": t.id, "title": t.title, "url": t.url, "text": t.text} for t in tabs]
-        
-        logger.info(f"Received query: '{query}' with {len(tabs_dict)} tabs")
-        logger.info(f"Tab titles: {[t.get('title', 'N/A')[:50] for t in tabs_dict[:5]]}")
-        logger.info(f"Tab URLs: {[t.get('url', 'N/A')[:50] for t in tabs_dict[:5]]}")
 
         # Process through simple agent (fast, direct)
         try:
             import time
+
             start_time = time.time()
             result = agent.process(query, tabs_dict, payload.chat_history)
             elapsed = time.time() - start_time
             logger.info(f"Total processing time: {elapsed:.2f}s")
-            
+
             if elapsed > 20:
                 logger.warning(f"Processing took {elapsed:.2f}s - slower than expected")
         except Exception as e:
@@ -239,6 +264,7 @@ async def run_agent(payload: QueryInput) -> AgentReply:
                 chosen_tab_id=None,
                 suggested_close_tab_ids=[],
                 price_info={},
+                reminder=None,
                 should_ask_cleanup=False,
             )
 
@@ -252,6 +278,7 @@ async def run_agent(payload: QueryInput) -> AgentReply:
             workspace_summary=result.get("workspace_summary"),
             alerts=result.get("alerts", []),
             price_info=result.get("price_info", {}),
+            reminder=result.get("reminder"),
             should_ask_cleanup=result.get("should_ask_cleanup", False),
         )
 
@@ -263,6 +290,7 @@ async def run_agent(payload: QueryInput) -> AgentReply:
             chosen_tab_id=None,
             suggested_close_tab_ids=[],
             price_info={},
+            reminder=None,
             should_ask_cleanup=False,
         )
 

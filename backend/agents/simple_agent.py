@@ -27,7 +27,7 @@ class SimpleAgent:
         logger.info(f"[SIMPLE] Processing query: '{query[:50]}' with {len(tabs)} tabs")
         
         # Check for "how many tabs" queries first
-        if any(phrase in query_lower for phrase in ["how many tabs", "how many tab", "count tabs", "number of tabs"]):
+        if any(phrase in query_lower for phrase in ["how many tabs", "how many tab", "how manytabs", "count tabs", "number of tabs"]):
             return self._count_tabs(query, tabs, start_time)
         
         # Determine query type
@@ -38,14 +38,18 @@ class SimpleAgent:
                 "birthdate", "birthday", "born", "age", "first", "last"
             ]) and
             not any(phrase in query_lower for phrase in [
-                "analyze", "all tabs", "my tabs", "what tabs", "show tabs", "list tabs", "how many tabs"
+                "analyze", "all tabs", "my tabs", "what tabs", "show tabs", "list tabs", "how many tabs", "how manytabs"
             ])
         )
         
         # If user explicitly asks to check all tabs or analyze
-        check_all_tabs = any(phrase in query_lower for phrase in ["all tabs", "analyze", "summary", "summarize", "compare", "search all"])
+        check_all_tabs = any(phrase in query_lower for phrase in ["all tabs", "analyze", "summary", "summarize", "compare", "search all", "think again", "try again", "analyze again"])
         
         if check_all_tabs:
+            return self._answer_question_all_tabs(query, tabs, start_time, chat_history)
+            
+        # "How many" questions should always check all tabs, not do full analysis
+        if "how many" in query_lower and not any(phrase in query_lower for phrase in ["how many tabs", "how many tab"]):
             return self._answer_question_all_tabs(query, tabs, start_time, chat_history)
             
         if is_specific_question:
@@ -57,8 +61,552 @@ class SimpleAgent:
                 # Fallback to checking all tabs if no specific relevant tab found
                 return self._answer_question_all_tabs(query, tabs, start_time, chat_history)
         
-        # Default: analyze tabs generally
-        return self._analyze_tabs(query, tabs, start_time)
+        # Check for price alert requests (check chat history for context if query is short/ambiguous)
+        price_alert_keywords = ["price", "cost", "expensive", "cheap", "product", "item"]
+        alert_keywords = ["alert", "notify", "remind", "tell me", "let me know", "set", "yes", "yeah", "please", "do it"]
+        drop_keywords = ["lower", "drop", "down", "decrease", "fall", "sale", "discount"]
+        
+        # Check if query mentions price alert OR if recent chat history mentions price
+        recent_chat = " ".join([msg.get("text", "") for msg in chat_history[-4:] if msg.get("role") in ["user", "assistant"]]).lower()
+        has_price_context = any(word in recent_chat for word in price_alert_keywords) or any(word in query_lower for word in price_alert_keywords)
+        has_alert_request = any(word in query_lower for word in alert_keywords)
+        has_drop_mention = any(word in query_lower for word in drop_keywords) or any(word in recent_chat for word in drop_keywords)
+        
+        # If user is asking to set price alert (with context from recent chat about price)
+        if has_price_context and has_alert_request and (has_drop_mention or "price" in query_lower or "price" in recent_chat):
+            # Also check if there's a product with price in tabs
+            has_product_with_price = any(tab.get("price") and tab.get("price") > 0 for tab in tabs)
+            if has_product_with_price:
+                return self._set_price_alert(query, tabs)
+
+        # Check for reminder/alert requests (more flexible matching)
+        # Include "alarm" phrasing as well, since users often say "set an alarm"
+        reminder_phrases = [
+            "remind me",
+            "set a reminder",
+            "set reminder",
+            "alert me",
+            "notify me",
+            "can you set a reminder",
+            "can you remind me",
+            "please remind me",
+            "create a reminder",
+            "add a reminder",
+            # Alarm-style phrasing
+            "set an alarm",
+            "set alarm",
+            "alarm me",
+            "create an alarm",
+        ]
+        # Also check for time patterns that indicate reminder requests
+        has_time_pattern = any(word in query_lower for word in ["everyday", "every day", "daily", "at ", "pm", "am", ":", "7:45", "8:00"])
+        has_reminder_intent = any(phrase in query_lower for phrase in reminder_phrases) or \
+                             (has_time_pattern and any(word in query_lower for word in ["remind", "alert", "notify", "tell", "alarm"]))
+        
+        # Check if previous message was about setting a reminder and current query is just a time
+        is_reminder_followup = False
+        # Also check for corrections about reminders (e.g., "I said 9:26 pm not 9:28 pm")
+        is_reminder_correction = False
+        correction_keywords = ["i said", "not", "wrong", "correction", "that's wrong", "that was", "should be", "meant"]
+        
+        if chat_history and len(chat_history) > 0:
+            # Check last assistant message for reminder
+            last_assistant_msg = ""
+            last_user_msg = ""
+            for msg in reversed(chat_history[-3:]):  # Check last 3 messages
+                if msg.get("role") == "assistant":
+                    last_assistant_msg = msg.get("text", "").lower()
+                elif msg.get("role") == "user":
+                    last_user_msg = msg.get("text", "").lower()
+            
+            # Check if last assistant message mentioned a reminder
+            if last_assistant_msg and ("reminder" in last_assistant_msg or ("set" in last_assistant_msg and "at" in last_assistant_msg)):
+                # Last assistant message was about a reminder
+                # Check if current query is a correction (has correction keywords + time pattern)
+                if any(keyword in query_lower for keyword in correction_keywords) and has_time_pattern:
+                    is_reminder_correction = True
+                    logger.info(f"Reminder correction detected: {query}")
+                # Or if it's just a time (follow-up)
+                elif has_time_pattern and len(query_lower.split()) <= 5:
+                    is_reminder_followup = True
+                    logger.info(f"Reminder follow-up detected: {query}")
+            
+            # Also check if query mentions a time that was in the last assistant message (correction pattern)
+            if last_assistant_msg and has_time_pattern:
+                # Extract time from last assistant message
+                import re
+                last_time_match = re.search(r'(\d{1,2}):(\d{2})\s*(am|pm|AM|PM)', last_assistant_msg)
+                if last_time_match:
+                    # Check if current query mentions a different time (correction)
+                    current_time_match = re.search(r'(\d{1,2}):(\d{2})\s*(am|pm|AM|PM)', query_lower)
+                    if current_time_match and any(keyword in query_lower for keyword in ["not", "said", "wrong", "should", "meant", "i said"]):
+                        is_reminder_correction = True
+                        logger.info(f"Reminder time correction detected: {query}")
+            
+            # Also check if query is correcting a time mentioned in assistant's last message
+            # Pattern: "i said X not Y" or "X not Y" where X and Y are times
+            if last_assistant_msg and ("reminder" in last_assistant_msg or "set" in last_assistant_msg):
+                import re
+                # Look for time patterns in query
+                time_pattern = r'(\d{1,2}):(\d{2})\s*(am|pm|AM|PM)'
+                times_in_query = re.findall(time_pattern, query_lower)
+                if len(times_in_query) >= 1 and any(keyword in query_lower for keyword in ["not", "said", "wrong", "i said"]):
+                    is_reminder_correction = True
+                    logger.info(f"Reminder correction detected via time pattern: {query}")
+            
+            # Also check if previous user message was about reminder
+            if last_user_msg and any(phrase in last_user_msg for phrase in reminder_phrases):
+                # Previous message was about reminder, current might be just the time
+                if has_time_pattern and len(query_lower.split()) <= 5:  # Short query with time = likely reminder time
+                    is_reminder_followup = True
+        
+        if has_reminder_intent or is_reminder_followup or is_reminder_correction:
+            logger.info(f"Reminder request detected: {query}")
+            result = self._set_reminder(query, chat_history)
+            if result:
+                return result
+            # If reminder setting failed, don't fall through to tab analysis - return an error message instead
+            logger.warn("Reminder setting failed")
+            return {
+                "reply": "I couldn't understand when to set the reminder. Please specify a time (e.g., '9:26 PM' or 'in 5 minutes').",
+                "mode": "reminder",
+                "chosen_tab_id": None,
+                "suggested_close_tab_ids": [],
+                "workspace_summary": {},
+                "alerts": [],
+                "price_info": {},
+                "should_ask_cleanup": False,
+            }
+        
+        # Only do full tab analysis if explicitly requested
+        # Check for explicit analysis/cleanup requests - be strict to avoid random tab reports
+        explicit_analysis_keywords = [
+            "analyze",
+            "analysis",
+            "summarize",
+            "summary",
+            "compare",
+            "what tabs",
+            "show tabs",
+            "list tabs",
+            "all tabs",
+            "my tabs",
+            "tab report",
+            "tab summary",
+            "what's in my tabs",
+            "report",
+            # Explicit cleanup / close‑tab intents
+            "close tabs",
+            "close the tabs",
+            "close all other tabs",
+            "close unrelated tabs",
+            "close tabs not relevant",
+            "keep only the tabs",
+        ]
+
+        # Explicit close/cleanup phrasing involving tabs
+        close_tabs_phrases = [
+            "close tabs",
+            "close the tabs",
+            "close all other tabs",
+            "close unrelated tabs",
+            "close tabs not relevant",
+            "keep only the tabs",
+        ]
+        has_close_tabs_intent = any(p in query_lower for p in close_tabs_phrases) and "tab" in query_lower
+
+        # Only match if it's a clear analysis/cleanup request, not just a stray word.
+        has_explicit_analysis_request = (
+            "analyze" in query_lower
+            or "analysis" in query_lower
+            or "tab report" in query_lower
+            or "tab summary" in query_lower
+            # Summaries / comparisons of tabs
+            or (
+                any(
+                    keyword in query_lower
+                    for keyword in ["summarize", "summary", "compare", "report"]
+                )
+                and any(
+                    context in query_lower
+                    for context in ["tab", "tabs", "my tabs", "all tabs"]
+                )
+            )
+            or has_close_tabs_intent
+        )
+        
+        # If no explicit request and query doesn't match any handler, ask for clarification
+        if not has_explicit_analysis_request and not is_specific_question:
+            # Check if query is very short or unclear
+            if len(query_lower.split()) <= 3 and not any(word in query_lower for word in ["remind", "alert", "set", "price", "how many"]):
+                return {
+                    "reply": "I'm not sure what you're asking. Could you please clarify? You can:\n- Ask questions about your tabs\n- Set reminders (e.g., 'remind me at 9 PM')\n- Request tab analysis (e.g., 'analyze my tabs')\n- Ask about specific information in your tabs",
+                    "mode": "single",
+                    "chosen_tab_id": None,
+                    "suggested_close_tab_ids": [],
+                    "workspace_summary": {},
+                    "alerts": [],
+                    "price_info": {},
+                    "should_ask_cleanup": False,
+                }
+        
+        # If user explicitly asked to close/keep tabs, run a lightweight cleanup helper
+        if has_close_tabs_intent:
+            return self._close_irrelevant_tabs(query, tabs)
+
+        # Otherwise, only do full tab analysis if explicitly requested
+        if has_explicit_analysis_request:
+            return self._analyze_tabs(query, tabs, start_time)
+        
+        # For other queries that don't match, try to answer from tabs without full analysis
+        # This handles general questions that might be answerable from a single tab
+        if is_specific_question:
+            # Already handled above, but if we get here, try to find relevant tab
+            relevant_tab = self._find_relevant_tab(query, tabs)
+            if relevant_tab:
+                return self._answer_question(query, relevant_tab, tabs, start_time, chat_history)
+            else:
+                # If no relevant tab found, check all tabs but don't do full analysis
+                return self._answer_question_all_tabs(query, tabs, start_time, chat_history)
+        
+        # Last resort: if query is unclear and doesn't match anything, ask for clarification
+        return {
+            "reply": "I'm not sure what you're asking. Could you please rephrase your question? You can:\n- Ask specific questions about your tabs\n- Set reminders (e.g., 'remind me at 9 PM')\n- Request tab analysis (e.g., 'analyze my tabs')\n- Ask 'how many tabs are open'",
+            "mode": "single",
+            "chosen_tab_id": None,
+            "suggested_close_tab_ids": [],
+            "workspace_summary": {},
+            "alerts": [],
+            "price_info": {},
+            "should_ask_cleanup": False,
+        }
+    
+    def _set_price_alert(self, query: str, tabs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Set a price alert based on user query and open tabs."""
+        # Find tab with price information
+        product_tab = None
+        for tab in tabs:
+            if tab.get("price") and tab.get("price") > 0:
+                # If query mentions product name, prioritize that tab
+                if tab.get("productName") and tab.get("productName").lower() in query.lower():
+                    product_tab = tab
+                    break
+                # Otherwise, just take the first one with a price (likely the active one or most relevant)
+                if not product_tab:
+                    product_tab = tab
+        
+        if not product_tab:
+            return {
+                "reply": "I couldn't find any product with a price in your open tabs. Please open a product page first.",
+                "mode": "price_alert",
+                "chosen_tab_id": None
+            }
+            
+        # Use LLM to extract threshold details
+        system_prompt = (
+            "You are a helpful assistant that extracts price alert details.\n"
+            f"Product: {product_tab.get('productName', 'Unknown Product')}\n"
+            f"Current Price: {product_tab.get('price', 0)}\n"
+            "Analyze the user's request to determine the alert threshold.\n"
+            "Return ONLY a JSON object with keys: 'alert_threshold' (number) and 'threshold_type' ('percentage' or 'absolute').\n"
+            "If the user says 'when price lowers' or 'drops', default to 5% drop (threshold_type='percentage', alert_threshold=5).\n"
+            "If the user specifies a value (e.g. 'below $50'), calculate the drop or set absolute value."
+        )
+        
+        user_prompt = f"User Request: {query}"
+        
+        try:
+            response = self.llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+            content = response.content if hasattr(response, "content") else str(response)
+            
+            import json
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group(0))
+                
+                price_alert = {
+                    "product_name": product_tab.get("productName", product_tab.get("title", "Product")),
+                    "url": product_tab.get("url"),
+                    "price": product_tab.get("price"),
+                    "currency": "USD", # Default for now
+                    "alert_threshold": data.get("alert_threshold", 5),
+                    "threshold_type": data.get("threshold_type", "percentage")
+                }
+                
+                return {
+                    "reply": f"I'm setting a price alert for {price_alert['product_name']}.",
+                    "price_alert": price_alert,
+                    "mode": "price_alert",
+                    "chosen_tab_id": product_tab.get("id"),
+                    "suggested_close_tab_ids": [],
+                    "workspace_summary": {},
+                    "alerts": [],
+                    "price_info": {},
+                    "should_ask_cleanup": False,
+                }
+        except Exception as e:
+            logger.error(f"Error setting price alert: {e}")
+            
+        return {
+            "reply": "I couldn't understand the price alert details. Please try again.",
+            "mode": "price_alert",
+            "chosen_tab_id": None
+        }
+
+    def _close_irrelevant_tabs(self, query: str, tabs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Compute which tabs are irrelevant and should be closed, based on a natural language close-tabs command.
+
+        Example query: "close all tabs irrelevant to kaggle and neetcode".
+        We keep tabs whose title/url/text mention the keep keywords; others go into suggested_close_tab_ids.
+        """
+        logger.info(f"[SIMPLE] Close-tabs request detected: '{query}'")
+
+        query_lower = query.lower()
+
+        # Heuristic: extract keywords after 'to ' or 'for ' as the things we want to keep
+        keep_keywords: List[str] = []
+        for marker in ["to ", "for ", "relevant to ", "related to "]:
+            if marker in query_lower:
+                tail = query_lower.split(marker, 1)[1]
+                # Split on common separators
+                raw_parts = [p.strip() for p in re.split(r"[,&/]", tail) if p.strip()]
+                for part in raw_parts:
+                    # Use only alphabetic tokens as keywords
+                    tokens = [t for t in re.split(r"\s+", part) if t.isalpha()]
+                    phrase = " ".join(tokens).strip()
+                    if phrase:
+                        keep_keywords.append(phrase)
+                break
+
+        # Fallback: if we didn't find anything after 'to/for', use non-stopwords from the query
+        if not keep_keywords:
+            stopwords = {"close", "tabs", "tab", "irrelevant", "relevant", "only", "keep", "and", "the", "all", "other"}
+            tokens = [t for t in re.split(r"[^a-z0-9]+", query_lower) if t]
+            keep_keywords = [t for t in tokens if t not in stopwords]
+
+        logger.info(f"[SIMPLE] Close-tabs keep keywords: {keep_keywords}")
+
+        if not tabs or not keep_keywords:
+            # Nothing to do safely
+            return {
+                "reply": "I couldn't confidently tell which tabs are relevant, so I didn't close anything.",
+                "mode": "single",
+                "chosen_tab_id": None,
+                "suggested_close_tab_ids": [],
+                "workspace_summary": {},
+                "alerts": [],
+                "price_info": {},
+                "should_ask_cleanup": False,
+            }
+
+        # Decide which tabs to keep/close
+        keep_ids: List[int] = []
+        close_ids: List[int] = []
+
+        for tab in tabs:
+            tab_id = tab.get("id")
+            if tab_id is None:
+                continue
+
+            title = (tab.get("title") or "").lower()
+            url = (tab.get("url") or "").lower()
+            text = (tab.get("text") or "").lower()
+
+            haystack = " ".join([title, url, text])
+
+            is_relevant = any(kw in haystack for kw in keep_keywords)
+
+            if is_relevant:
+                keep_ids.append(tab_id)
+            else:
+                close_ids.append(tab_id)
+
+        logger.info(f"[SIMPLE] Close-tabs decision: keep={keep_ids}, close={close_ids}")
+
+        if not close_ids:
+            return {
+                "reply": "All your current tabs look relevant to what you asked about, so I didn't close anything.",
+                "mode": "single",
+                "chosen_tab_id": None,
+                "suggested_close_tab_ids": [],
+                "workspace_summary": {},
+                "alerts": [],
+                "price_info": {},
+                "should_ask_cleanup": False,
+            }
+
+        # Build a short, human explanation listing what we kept
+        kept_titles = [tab.get("title", "Untitled") for tab in tabs if tab.get("id") in keep_ids]
+        num_closed = len(close_ids)
+        num_kept = len(keep_ids)
+
+        if kept_titles:
+            kept_list = "; ".join(kept_titles[:4])
+            if len(kept_titles) > 4:
+                kept_list += " …"
+            reply = (
+                f"I'll keep the tabs related to: {', '.join(keep_keywords)}.\n\n"
+                f"Kept {num_kept} tab(s): {kept_list}\n"
+                f"and will close {num_closed} other tab(s)."
+            )
+        else:
+            reply = f"I'm closing {num_closed} tab(s) that look unrelated to {', '.join(keep_keywords)}."
+
+        return {
+            "reply": reply,
+            "mode": "single",
+            "chosen_tab_id": None,
+            "suggested_close_tab_ids": close_ids,
+            "workspace_summary": {},
+            "alerts": [],
+            "price_info": {},
+            "should_ask_cleanup": False,
+        }
+    
+    def _set_reminder(self, query: str, chat_history: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Set a reminder based on user query and chat context."""
+        from datetime import datetime
+        current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Get current time in both local and Pacific Time
+        from datetime import datetime
+        try:
+            from zoneinfo import ZoneInfo
+            pacific_tz = ZoneInfo('America/Los_Angeles')
+            current_pacific = datetime.now(pacific_tz)
+            current_pacific_str = current_pacific.strftime("%Y-%m-%d %H:%M:%S %Z")
+        except (ImportError, Exception):
+            # Fallback: calculate Pacific Time manually (UTC-8 or UTC-7 depending on DST)
+            # This is approximate but should work for most cases
+            from datetime import timezone, timedelta
+            try:
+                # Try to get Pacific offset (PST = UTC-8, PDT = UTC-7)
+                # We'll approximate by checking if we're in daylight saving time
+                now = datetime.now()
+                # Rough DST check: DST typically March-November
+                is_dst = now.month in range(3, 11) or (now.month == 3 and now.day >= 8) or (now.month == 11 and now.day < 1)
+                pacific_offset = timedelta(hours=-7 if is_dst else -8)
+                pacific_tz_info = timezone(pacific_offset)
+                current_pacific = datetime.now(pacific_tz_info)
+                current_pacific_str = current_pacific.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                current_pacific_str = current_date  # Final fallback
+        
+        system_prompt = (
+            f"You are a helpful assistant that extracts reminder details.\n"
+            f"Current Date/Time (local): {current_date}\n"
+            f"Current Date/Time (Pacific): {current_pacific_str}\n"
+            "Analyze the user's request and the chat history to determine the reminder message and the target time.\n\n"
+            "IMPORTANT RULES:\n"
+            "1. TIME PARSING PRIORITY:\n"
+            "   - If user says 'in X mins' or 'in X minutes' AND also specifies an explicit time (e.g., '9:26 PM'), ALWAYS use the explicit time, NOT the 'in X mins' calculation\n"
+            "   - Example: 'set a reminder in 2 mins 9:26 pm' → use 9:26 PM, NOT 9:28 PM (9:26 + 2 mins)\n"
+            "   - The 'in X mins' is just context about when that time occurs, not an instruction to add minutes\n"
+            "   - Only use 'in X mins' calculation if NO explicit time is given (e.g., 'remind me in 5 minutes')\n"
+            "2. CORRECTIONS:\n"
+            "   - If user says 'I said X not Y' or 'that's wrong, it should be X', extract the CORRECT time (X) from their correction\n"
+            "   - Look for phrases like 'I said 9:26 pm not 9:28 pm' → use 9:26 PM\n"
+            "   - Ignore the incorrect time mentioned after 'not'\n"
+            "3. TIMEZONE HANDLING:\n"
+            "   - If user specifies 'Pacific Time', 'PT', 'PST', 'PDT', or 'Pacific', convert the time to Pacific Time\n"
+            "   - If no timezone is specified, use the user's local timezone\n"
+            "   - Always return timestamp in ISO 8601 format: YYYY-MM-DDTHH:MM:SS-08:00 for PST or YYYY-MM-DDTHH:MM:SS-07:00 for PDT\n"
+            "   - Or use UTC: YYYY-MM-DDTHH:MM:SSZ (convert Pacific Time to UTC: PST = UTC-8, PDT = UTC-7)\n"
+            "4. For 'everyday'/'daily' reminders with a time:\n"
+            "   - Parse the time (e.g., '7:52 PM', '7:52pm', '9:10 PM Pacific')\n"
+            "   - Convert to the appropriate timezone if specified\n"
+            "   - Compare with current time in that timezone\n"
+            "   - If the time has NOT passed today, set for TODAY at that time\n"
+            "   - If the time HAS passed today (or is within 2 minutes), set for TOMORROW at that time\n"
+            "   - This ensures the first reminder happens at the next occurrence\n"
+            "5. If the user provides just a time (e.g., '7:45 PM', '9:12 PM Pacific') after asking to set a reminder, combine it with the previous reminder request from chat history.\n"
+            "6. If the user says '24 hrs before', '24 hours before', or similar:\n"
+            "   - Look at the chat history to find the most recent event/deadline mentioned\n"
+            "   - Extract the date/time of that event\n"
+            "   - Subtract 24 hours from that time\n"
+            "   - Use that calculated time as the reminder timestamp\n"
+            "7. For recurring reminders (everyday/daily), ALWAYS set the timestamp for the NEXT occurrence of that time (tomorrow if time has passed today).\n"
+            "8. Parse times like '7:45 PM', '8:00 AM', '19:45', '7:45pm', '9:10 PM Pacific Time', etc. correctly. Assume 12-hour format if AM/PM is specified.\n"
+            "9. CRITICAL: If the specified time is within 2 minutes of the current time or has passed, set it for TOMORROW to ensure it fires.\n"
+            "10. Combine the reminder message from chat history if the current query is just a time or a correction.\n\n"
+            "Return ONLY a JSON object with keys:\n"
+            "- 'message' (what to remind about - extract ONLY from the current user request, NOT from chat history. If no specific message is given, use a simple default like 'Reminder')\n"
+            "- 'timestamp' (ISO 8601 format YYYY-MM-DDTHH:MM:SS with timezone, e.g., '2024-11-30T21:10:00-08:00' for 9:10 PM PST or '2024-11-30T21:10:00-07:00' for PDT)\n"
+            "- 'recurring' (true if 'everyday'/'daily'/'every day' is mentioned, false otherwise)\n"
+            "CRITICAL: The 'message' field should be SHORT and extracted from the current request only. Do NOT include previous chat messages or full conversation history."
+        )
+        
+        user_prompt = (
+            f"Chat History (for context only - do NOT include previous messages in the reminder message):\n"
+            f"{chr(10).join([f'{msg['role']}: {msg['text']}' for msg in chat_history[-6:]])}\n\n"
+            f"User Request: {query}\n\n"
+            f"IMPORTANT: Extract ONLY the reminder message from the current user request. Do NOT include previous chat messages or questions in the reminder message. "
+            f"If the user says 'set a reminder at 9:40 PM', the message should be something simple like 'Reminder' or extract what they want to be reminded about from THIS request only."
+        )
+        
+        try:
+            response = self.llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
+            content = response.content if hasattr(response, "content") else str(response)
+            
+            # Extract JSON
+            import json
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group(0))
+                timestamp = data.get("timestamp")
+                message = data.get("message", "Reminder")
+                recurring = data.get("recurring", False)
+                
+                if timestamp:
+                    # Format timestamp nicely for display
+                    try:
+                        from datetime import datetime
+                        # Parse ISO timestamp
+                        if 'T' in timestamp:
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        else:
+                            dt = datetime.fromisoformat(timestamp)
+                        
+                        # Format as friendly date/time
+                        friendly_time = dt.strftime("%B %d, %Y at %I:%M %p")
+                    except:
+                        # Fallback to just showing the time if parsing fails
+                        friendly_time = timestamp.split('T')[1].split('-')[0] if 'T' in timestamp else timestamp
+                    
+                    # For recurring reminders, create multiple alarms (daily for next 30 days)
+                    if recurring:
+                        reply_text = f"I've set a daily reminder for: {message} at {friendly_time}"
+                    else:
+                        reply_text = f"I've set a reminder for: {message} at {friendly_time}"
+                    
+                    return {
+                        "reply": reply_text,
+                        "reminder": {
+                            "message": message,
+                            "timestamp": timestamp,
+                            "recurring": recurring
+                        },
+                        "mode": "reminder",
+                        "chosen_tab_id": None,
+                        "suggested_close_tab_ids": [],
+                        "workspace_summary": {},
+                        "alerts": [],
+                        "price_info": {},
+                        "should_ask_cleanup": False,
+                    }
+        except Exception as e:
+            logger.error(f"Error setting reminder: {e}")
+            
+        return {
+            "reply": "I couldn't understand when to set the reminder. Please specify a time.",
+            "mode": "reminder",
+            "chosen_tab_id": None,
+            "suggested_close_tab_ids": [],
+            "workspace_summary": {},
+            "alerts": [],
+            "price_info": {},
+            "should_ask_cleanup": False,
+        }
     
     def _count_tabs(self, query: str, tabs: List[Dict[str, Any]], start_time: float) -> Dict[str, Any]:
         """Count and list all open tabs - let LLM format the response naturally."""
@@ -190,8 +738,10 @@ class SimpleAgent:
             try:
                 from urllib.parse import urlparse
                 domain = urlparse(url).netloc.lower()
-                if any(word in domain for word in query_words):
-                    score += 10  # Strong boost for domain match
+                # Split domain parts (e.g. "neetcode.io" -> ["neetcode", "io"])
+                domain_parts = domain.split('.')
+                if any(part in query_words for part in domain_parts if len(part) > 2):
+                    score += 15  # Stronger boost for domain match (was 10)
             except:
                 pass
             
@@ -285,40 +835,34 @@ class SimpleAgent:
             system_prompt = (
                 f"You are TabSensei, an assistant that answers questions based ONLY on the provided content from multiple tabs.\n"
                 f"Current Date: {current_date}\n\n"
-                "CRITICAL for chronological questions (first, earliest, oldest, birthdate, etc.):\n"
-                "1. Search through ALL tabs systematically - do not stop at the first mention\n"
-                "2. Look for dates, years, chronological lists, timelines, filmography sections in EACH tab\n"
-                "3. Find ALL items that could answer the question across ALL tabs, then identify which one is EARLIEST by date/year\n"
-                "4. If you see lists or filmographies in any tab, check the ENTIRE list, not just the first few items\n"
-                "5. Compare dates carefully across ALL tabs - the answer must be the item with the EARLIEST date\n"
-                "6. If one tab mentions 'first' but another tab shows an earlier date, use the EARLIEST date\n"
-                "7. Be precise - include the exact name/title, year/date, and which tab it came from\n\n"
-                "Answer the user's question directly and accurately.\n"
-                "- State the exact name/title and the year/date\n"
-                "- Mention which tab(s) contained this information\n"
-                "- If you're uncertain, say so\n"
-                "- Keep your answer concise but complete\n"
-                "- DO NOT list tabs that did not contain the information. Only mention the source of the answer.\n"
-                "- If no information is found in any tab, simply say 'I couldn't find the answer in your open tabs.' Do NOT list what you checked."
+                "CRITICAL INSTRUCTIONS:\n"
+                "1. Search through ALL tabs to find the answer\n"
+                "2. For chronological questions, find ALL dates/years across ALL tabs, then identify the EARLIEST\n"
+                "3. Give a DIRECT, CONCISE answer - just the answer itself\n"
+                "4. Do NOT explain your search process\n"
+                "5. Do NOT say 'Source:' or cite sources explicitly - just give the answer naturally\n"
+                "6. If helpful, you can naturally mention where you found it (e.g., 'According to Wikipedia' or 'From the Roadmap tab'), but this is optional\n"
+                "7. Keep it conversational and natural\n\n"
+                "Example good response: 'Johnny Depp's birthdate is June 9, 1963.'\n"
+                "Example also good: 'You have solved 99 out of 150 Neetcode problems.'\n"
+                "Example bad response: 'I searched through multiple tabs... In Tab 1 I found... The answer is... Source: Wikipedia.'\n\n"
+                "If no information is found, simply say: 'I couldn't find the answer in your open tabs.'"
             )
         else:
             system_prompt = (
                 f"You are TabSensei, an assistant that answers questions based ONLY on the provided content from multiple tabs.\n"
                 f"Current Date: {current_date}\n\n"
-                "IMPORTANT: You must thoroughly analyze ALL tabs to find the answer. Do not rely on partial information from just one tab.\n\n"
-                "For factual questions:\n"
-                "- Search through ALL tabs carefully\n"
-                "- Look for specific facts, dates, names, or details in each tab\n"
-                "- If the answer appears in multiple tabs, verify consistency\n"
-                "- If tabs have conflicting information, mention both and indicate which seems more reliable\n"
-                "- If the answer is not clearly in any tab, say 'The information is not available in these tabs'\n\n"
-                "Answer the user's question directly and accurately using information from the tabs.\n"
-                "- Be specific and factual\n"
-                "- Cite which tab(s) contained the information when possible\n"
-                "- If uncertain, indicate that\n"
-                "- Keep your answer concise but complete\n"
-                "- DO NOT list tabs that did not contain the information. Only mention the source of the answer.\n"
-                "- If no information is found in any tab, simply say 'I couldn't find the answer in your open tabs.' Do NOT list what you checked."
+                "CRITICAL INSTRUCTIONS:\n"
+                "1. Search through ALL tabs to find the answer\n"
+                "2. Give a DIRECT, CONCISE answer - just the answer itself\n"
+                "3. Do NOT explain your search process\n"
+                "4. Do NOT say 'Source:' or cite sources explicitly - just give the answer naturally\n"
+                "5. If helpful, you can naturally mention where you found it, but this is optional\n"
+                "6. Keep it conversational and natural\n\n"
+                "Example good response: 'You have solved 99 out of 150 Neetcode problems.'\n"
+                "Example also good: 'The price is $89.99.'\n"
+                "Example bad response: 'I checked Tab 1 and found... Then I looked at Tab 2... The answer is... Source: Roadmap tab.'\n\n"
+                "If no information is found, simply say: 'I couldn't find the answer in your open tabs.'"
             )
         
         # Build user prompt with all tab contents
@@ -350,12 +894,12 @@ class SimpleAgent:
                 combined_content = "\\n".join(content_parts)
         
         user_prompt = (
-            f"I have {len(tab_contents)} tab(s) open. Please answer the question by analyzing ALL of them:\n\n"
+            f"Question: {query}\n\n"
+            f"Content from {len(tab_contents)} tab(s):\n\n"
             f"{combined_content}\n\n"
             f"Chat History:\n"
             f"{chr(10).join([f'{msg['role']}: {msg['text']}' for msg in chat_history[-6:]])}\n\n"
-            f"Question: {query}\n\n"
-            f"{'⚠️ CRITICAL: This is a chronological question. You MUST search through ALL tabs above to find ALL dates/years, then identify the EARLIEST one. Check complete lists, filmographies, and timelines in every tab.' if is_chronological else '⚠️ IMPORTANT: Thoroughly analyze ALL tabs above to find the accurate answer. Information might be spread across multiple tabs.'}"
+            f"⚠️ Give a DIRECT answer immediately. Do NOT explain your search process. Do NOT say 'Source:'. Just give the answer naturally."
         )
         try:
             llm_start = time.time()
@@ -375,6 +919,9 @@ class SimpleAgent:
                     
                     if not answer or len(answer) < 5:
                         raise ValueError("LLM returned empty answer")
+                    
+                    # Clean up the answer: remove "Source:" mentions and make it more natural
+                    answer = self._clean_answer(answer)
                         
                 except concurrent.futures.TimeoutError:
                     llm_elapsed = time.time() - llm_start
@@ -429,15 +976,12 @@ class SimpleAgent:
         url = tab.get("url", "")
         text = (tab.get("text", "") or "").strip()
         
-        # Clean text - remove HTML/CSS artifacts
-        text = re.sub(r'[{][^}]*[}]', '', text)  # Remove CSS
-        text = re.sub(r'<[^>]+>', '', text)  # Remove HTML tags
-        text = " ".join(text.split())  # Normalize whitespace
-        text = text[:6000]  # Increased for better analysis (was 3000)
+        # Use raw text (already cleaned by background.js) to avoid deleting content
+        text = text[:25000]  # Increased to 25k for deep analysis (Gemini can handle it)
         
         # Google search pages might have less content but still contain useful info
         is_google_search = "google.com" in url.lower() and "/search" in url.lower()
-        min_content_length = 10 if is_google_search else 50
+        min_content_length = 20  # Lower threshold for all tabs to ensure inclusion
         
         if not text or len(text) < min_content_length:
             if is_google_search:
@@ -476,42 +1020,35 @@ class SimpleAgent:
             system_prompt = (
                 f"You are TabSensei, an assistant that answers questions based ONLY on the provided content.\n"
                 f"Current Date: {current_date}\n\n"
-                "CRITICAL for chronological questions (first, earliest, oldest, birthdate, etc.):\n"
-                "1. Search through ALL the content systematically - do not stop at the first mention\n"
-                "2. Look for dates, years, chronological lists, timelines, filmography sections\n"
-                "3. Find ALL items that could answer the question, then identify which one is EARLIEST by date/year\n"
-                "4. If you see a list or filmography, check the ENTIRE list, not just the first few items\n"
-                "5. Compare dates carefully - the answer must be the item with the EARLIEST date\n"
-                "6. If the content mentions 'first' but also shows an earlier date elsewhere, use the EARLIEST date\n"
-                "7. Be precise - include the exact name/title and year/date in your answer\n\n"
-                "Answer the user's question directly and accurately.\n"
-                "- State the exact name/title and the year/date\n"
-                "- If you're uncertain, say so\n"
-                "- Keep your answer concise but complete\n"
-                "- DO NOT list tabs that did not contain the information. Only mention the source of the answer.\n"
-                "- If no information is found, simply say 'I couldn't find the answer in the provided content.'"
+                "CRITICAL INSTRUCTIONS:\n"
+                "1. Search through ALL content to find the answer\n"
+                "2. For chronological questions, find ALL dates/years, then identify the EARLIEST\n"
+                "3. Give a DIRECT, CONCISE answer - just the answer itself\n"
+                "4. Do NOT explain your search process\n"
+                "5. Do NOT say 'Source:' or cite sources explicitly - just give the answer naturally\n"
+                "6. Keep it conversational and natural\n\n"
+                "Example good response: 'Johnny Depp's birthdate is June 9, 1963.'\n"
+                "Example bad response: 'I searched through the content... I found multiple mentions... The answer is... Source: Wikipedia.'\n\n"
+                "If no information is found, simply say: 'I couldn't find the answer in this tab.'"
             )
         else:
             system_prompt = (
                 f"You are TabSensei, an assistant that answers questions based ONLY on the provided content.\n"
                 f"Current Date: {current_date}\n\n"
-                "IMPORTANT: You must thoroughly analyze the ENTIRE content to find the answer. Do not rely on partial information.\n\n"
-                "For factual questions:\n"
-                "- Search through ALL the content carefully\n"
-                "- Look for specific facts, dates, names, or details\n"
-                "- Verify your answer by checking if it's explicitly stated in the content\n"
-                "- If you find conflicting information, mention both and indicate which seems more reliable\n"
-                "- If the answer is not clearly in the content, say 'The information is not available in this tab'\n\n"
-                "Answer the user's question directly and accurately using information from the content.\n"
-                "- Be specific and factual\n"
-                "- Cite specific details from the content when possible\n"
-                "- If uncertain, indicate that\n"
-                "- Keep your answer concise but complete\n"
-                "- DO NOT list tabs that did not contain the information. Only mention the source of the answer.\n"
-                "- If no information is found, simply say 'I couldn't find the answer in the provided content.'"
+                "CRITICAL INSTRUCTIONS:\n"
+                "1. Search through ALL content to find the answer\n"
+                "2. Give a DIRECT, CONCISE answer - just the answer itself\n"
+                "3. Do NOT explain your search process\n"
+                "4. Do NOT say 'Source:' or cite sources explicitly - just give the answer naturally\n"
+                "5. Keep it conversational and natural\n\n"
+                "Example good response: 'You have solved 99 out of 150 Neetcode problems.'\n"
+                "Example bad response: 'I checked the content... I found various mentions... After analyzing... The answer is... Source: Roadmap tab.'\n\n"
+                "If no information is found, simply say: 'I couldn't find the answer in this tab.'"
             )
         
-        user_prompt = f"""Content from: {title}
+        user_prompt = f"""Question: {query}
+
+Content from: {title}
 URL: {url}
 
 {text}
@@ -519,9 +1056,7 @@ URL: {url}
 Chat History:
 {chr(10).join([f"{msg['role']}: {msg['text']}" for msg in chat_history[-6:]])}
 
-Question: {query}
-
-{'⚠️ CRITICAL: This is a chronological question. You MUST search through ALL content above to find ALL dates/years, then identify the EARLIEST one. Check complete lists, filmographies, and timelines.' if is_chronological else '⚠️ IMPORTANT: Thoroughly analyze the content above to find the accurate answer.'}"""
+⚠️ Give a DIRECT answer immediately. Do NOT explain your search process. Do NOT say 'Source:'. Just give the answer naturally."""
         
         # Call LLM with timeout protection
         try:
@@ -542,6 +1077,9 @@ Question: {query}
                     
                     if not answer or len(answer) < 5:
                         raise ValueError("LLM returned empty answer")
+                    
+                    # Clean up the answer: remove "Source:" mentions and make it more natural
+                    answer = self._clean_answer(answer)
                         
                 except concurrent.futures.TimeoutError:
                     llm_elapsed = time.time() - llm_start
@@ -576,6 +1114,22 @@ Question: {query}
                 "price_info": {},
                 "should_ask_cleanup": False,
             }
+    
+    def _clean_answer(self, answer: str) -> str:
+        """Clean up the answer to remove 'Source:' mentions and make it more natural."""
+        import re
+        # Remove "Source:" or "Source :" patterns (case insensitive)
+        answer = re.sub(r'\s*[Ss]ource\s*:?\s*[^\n]*', '', answer, flags=re.IGNORECASE)
+        # Remove standalone "Source" at the end
+        answer = re.sub(r'\s+[Ss]ource\s*$', '', answer)
+        # Clean up multiple spaces and newlines
+        answer = re.sub(r'\s+', ' ', answer)
+        answer = re.sub(r'\n\s*\n', '\n', answer)
+        # Remove leading/trailing whitespace
+        answer = answer.strip()
+        # Remove any trailing periods that might be left after removing Source
+        answer = re.sub(r'\.\s*\.+$', '.', answer)
+        return answer
     
     def _extract_fallback_answer(self, query: str, text: str, title: str) -> str:
         """Extract answer from text when LLM fails - improved extraction."""

@@ -1,8 +1,8 @@
-# TIC-AI Tab Assistant
+# Tab Sensei – AI Tab Assistant
 
-An intelligent Chrome extension that uses AI to analyze, compare, and manage your open browser tabs. TIC-AI (Tab Intelligence & Context Assistant) provides a conversational interface that understands your open tabs and helps you make decisions, find information, and clean up your browsing session.
+An intelligent Chrome extension that uses AI to analyze, compare, and manage your open browser tabs. **Tab Sensei** (formerly TIC-AI) provides a conversational interface that understands your open tabs and helps you make decisions, find information, set reminders, and clean up your browsing session.
 
-## 🌟 Features
+## 🌟 Current Features (Tab Sensei)
 
 ### 🤖 AI-Powered Tab Analysis
 - **Query your tabs**: Ask questions about the content in your open tabs
@@ -21,6 +21,13 @@ An intelligent Chrome extension that uses AI to analyze, compare, and manage you
 - **Follow-up questions**: Ask follow-ups like "price is no longer a constraint"
 - **Table rendering**: Beautiful comparison tables for multi-tab queries
 - **New Chat**: Start fresh conversations with a single click
+
+### ⏰ Smart Reminders & Notifications
+- **Natural-language reminders**: Ask things like “remind me in 1 minute to do neetcode” or “remind me every day at 8 PM”.
+- **Chrome alarms**: Reminders are backed by `chrome.alarms`, so they fire even if you switch tabs.
+- **Inline page popup**: When a reminder fires, a **Tab Sensei** popup appears on every open tab, with a clear message and a close (X) button.
+- **Cross-tab sync**: Closing the reminder in one tab clears it in all tabs.
+- **Session-aware cleanup**: When the backend restarts, Tab Sensei clears old chat history and alarms so you always start fresh.
 
 ### 🎨 User Experience
 - **Movable window**: Drag the assistant window to any position (currently fixed position, drag feature coming soon)
@@ -273,13 +280,18 @@ extension-assistant/
 
 ## 📝 TODO / Roadmap
 
-- [ ] Draggable overlay window
-- [ ] Tab grouping and organization
-- [ ] Export conversation history
-- [ ] Multi-window support
-- [ ] Custom model fine-tuning
-- [ ] Voice input support
-- [ ] Browser extension for Firefox/Edge
+Near‑term improvements:
+- [ ] **UI refresh for Tab Sensei** – polish the chat overlay and popup panel to feel more like a dedicated “coach” for your browsing.
+- [ ] **Better reminder management UI** – view, edit, and cancel reminders from inside the assistant.
+- [ ] **Smarter error handling** – clearer inline messages when the backend is down or the extension context is invalidated.
+
+Future ideas:
+- [ ] Draggable and resizable overlay window with snapping to corners.
+- [ ] Tab grouping and organization suggestions (e.g., “group these research tabs”).
+- [ ] Export conversation history and reminder logs.
+- [ ] Multi-window support and cross-window tab awareness.
+- [ ] Optional voice input.
+- [ ] Ports to other browsers (Firefox, Edge) once Chrome version is stable.
 
 ## 🤝 Contributing
 
